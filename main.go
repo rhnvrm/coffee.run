@@ -48,7 +48,6 @@ func main() {
 }
 
 func serveIndex(w http.ResponseWriter, r *http.Request) {
-	log.Println("Serving index.html", string(indexHTML))
 	w.Header().Set("Content-Type", "text/html")
 	w.Write([]byte(indexHTML))
 }
