@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>coffee.run</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+
+<body class="bg-gray-100 py-8">
+    <div class="max-w-4xl mx-auto px-4">
+        <h1 class="text-3xl font-bold mb-6">coffee.run</h1>
+
+        <div class="bg-white p-6 mb-6 shadow-md rounded-lg">
+            <h3 class="text-xl font-semibold mb-4">About you</h3>
+            <input type="text" id="userName" placeholder="Enter your name, e.g. John Doe"
+                class="border-2 border-gray-300 p-2 focus:outline-none focus:border-blue-500 w-full mb-6">
+            <h3 class="text-xl font-semibold mb-4">Add New Item</h3>
+            <div class="flex gap-4">
+                <input type="text" id="newItemName" placeholder="Enter item name, e.g. Citrus Cold Brew - Medium"
+                    class="border-2 border-gray-300 p-2 focus:outline-none focus:border-blue-500 flex-grow">
+                <button onclick="addItem()"
+                    class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Add Item</button>
+            </div>
+        </div>
+
+        <table class="table-auto w-full bg-white shadow-md overflow-hidden border-separate p-2">
+            <thead class="bg-gray-800 text-white">
+                <tr>
+                    <th class="px-4 py-2">Item</th>
+                    <th class="px-4 py-2">Count</th>
+                    <th class="px-4 py-2">Users</th>
+                    <th class="px-4 py-2">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="menuTable" class="text-gray-700">
+            </tbody>
+        </table>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>
+        function updateMenu() {
+            $.get("/menu", function (response) {
+                var rows = "";
+                var data = JSON.parse(response);
+                $.each(data.data, function (key, val) {
+                    rows += "<tr><td>" + key + "</td><td>" + val.count + "</td>";
+                    rows += "<td>";
+                        
+                    $.each(val.owner_count, function (owner, count) {
+                        rows += owner + " (" + count + ")<br>";
+                    });
+
+                    rows += "</td>";
+                    rows += '<td><button onclick="editItem(\'' + key + '\', \'increment\')" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-1 px-2 rounded">+</button> ';
+                    rows += '<button onclick="editItem(\'' + key + '\', \'decrement\')" class="bg-red-500 hover:bg-red-700 text-white font-bold py-1 px-2 rounded">-</button> ';
+                    rows += '<button onclick="editItem(\'' + key + '\', \'remove\')" class="bg-gray-500 hover:bg-gray-700 text-white font-bold py-1 px-2 rounded">Remove</button></td></tr>';
+                });
+                $("#menuTable").html(rows);
+            });
+        }
+
+        function addItem() {
+            var itemName = $("#newItemName").val();
+            if (itemName === "") {
+                alert("Please enter an item name.");
+                return;
+            }
+
+
+            updateItem(itemName, "add", { name: itemName });
+            $("#newItemName").val(""); // clear input after adding
+        }
+
+        function checkNameEntered() {
+            var userName = $("#userName").val();
+            if (userName === "") {
+                alert("Please enter your name.");
+                return false;
+            }
+            return true;
+        }
+
+        function editItem(itemName, action) {
+            if (!checkNameEntered()) {
+                return;
+            }
+
+            let data = {
+                owner: $("#userName").val()
+            }
+
+            updateItem(itemName, action, data);
+        }
+
+        function updateItem(itemName, action, data) {
+            if (action === "remove") {
+                if (!confirm("Are you sure you want to remove this item?")) {
+                    return;
+                }
+            }
+            
+            $.ajax({
+                url: "/update",
+                type: "POST",
+                contentType: "application/json",
+                data: JSON.stringify({ item: itemName, action: action, data: data }),
+                success: function () {
+                    updateMenu();
+                },
+                error: function (response) {
+                    alert('Error: ' + response.responseText);
+                }
+            });
+        }
+
+        $(document).ready(function () {
+            updateMenu(); // Initial menu load
+        });
+    </script>
+</body>
+
+</html>
