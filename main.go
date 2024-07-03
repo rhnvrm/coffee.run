@@ -7,7 +7,13 @@ import (
 	"net/http"
 	"os"
 	"sync"
+
+	"github.com/gorilla/mux"
+	"golang.org/x/exp/rand"
 )
+
+//go:embed page.html
+var pageHTML string
 
 //go:embed index.html
 var indexHTML string
@@ -23,10 +29,32 @@ type MenuItem struct {
 	Count      int            `json:"count"`
 }
 
-var menu = struct {
-	sync.RWMutex
+type Menu struct {
 	Items map[string]*MenuItem `json:"items"`
-}{Items: make(map[string]*MenuItem)}
+	sync.RWMutex
+}
+
+func newMenu() *Menu {
+	return &Menu{
+		Items: make(map[string]*MenuItem),
+	}
+}
+
+type Session struct {
+	URI  string `json:"uri"`
+	Menu *Menu  `json:"menu"`
+}
+
+var sessions = make(map[string]*Session)
+
+func newSession(url string) *Session {
+	s := &Session{
+		URI:  url,
+		Menu: newMenu(),
+	}
+	sessions[url] = s
+	return s
+}
 
 func loadEnv(key string, defaultValue string) string {
 	value := os.Getenv(key)
@@ -37,14 +65,18 @@ func loadEnv(key string, defaultValue string) string {
 }
 
 func main() {
-	http.HandleFunc("/menu", handleMenu)
-	http.HandleFunc("/update", handleUpdate)
+	r := mux.NewRouter()
 
-	http.HandleFunc("/", serveIndex)
+	r.HandleFunc("/new", handleNewSession)
+	r.HandleFunc("/api/{session}/menu", handleGetMenu)
+	r.HandleFunc("/api/{session}/update", handleUpdate)
+
+	r.HandleFunc("/", serveIndex)
+	r.HandleFunc("/session/{session}", servePage)
 
 	address := loadEnv("HTTP_ADDRESS", ":8080")
-	log.Println("Server started on ", address)
-	log.Fatal(http.ListenAndServe(address, nil))
+	log.Printf("Server started on http://%s", address)
+	log.Fatal(http.ListenAndServe(address, r))
 }
 
 func serveIndex(w http.ResponseWriter, r *http.Request) {
@@ -52,15 +84,75 @@ func serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(indexHTML))
 }
 
-func handleMenu(w http.ResponseWriter, r *http.Request) {
-	menu.RLock()
-	defer menu.RUnlock()
-	json.NewEncoder(w).Encode(Envelope{Status: "ok", Data: menu.Items})
+func servePage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(pageHTML))
+}
+
+func randomString(n int) string {
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letters[rand.Intn(len(letters))]
+	}
+
+	return string(b)
+}
+
+func handleNewSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Invalid method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	sess := &Session{
+		URI:  randomString(8),
+		Menu: newMenu(),
+	}
+
+	json.NewEncoder(w).Encode(Envelope{Status: "ok", Data: sess})
+}
+
+func handleGetMenu(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Invalid method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	vars := mux.Vars(r)
+	session, ok := vars["session"]
+	if !ok {
+		http.Error(w, "Session is required", http.StatusBadRequest)
+		return
+	}
+
+	sess, ok := sessions[session]
+	if !ok {
+		sess = newSession(session)
+	}
+
+	sess.Menu.RLock()
+	defer sess.Menu.RUnlock()
+	json.NewEncoder(w).Encode(Envelope{Status: "ok", Data: sess.Menu.Items})
 }
 
 func handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	vars := mux.Vars(r)
+	session, ok := vars["session"]
+	if !ok {
+		http.Error(w, "Session is required", http.StatusBadRequest)
+		return
+	}
+
+	sess, ok := sessions[session]
+	if !ok {
+		http.Error(w, "Session not found", http.StatusNotFound)
 		return
 	}
 
@@ -75,8 +167,8 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	menu.Lock()
-	defer menu.Unlock()
+	sess.Menu.Lock()
+	defer sess.Menu.Unlock()
 
 	switch req.Action {
 	case "add":
@@ -94,19 +186,19 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if _, ok := menu.Items[req.Item]; ok {
+		if _, ok := sess.Menu.Items[req.Item]; ok {
 			http.Error(w, "Item already exists", http.StatusBadRequest)
 			return
 		}
 
-		menu.Items[req.Item] = &MenuItem{
+		sess.Menu.Items[req.Item] = &MenuItem{
 			Name:       req.Item,
 			Count:      0,
 			OwnerCount: map[string]int{},
 		}
 
 	case "remove":
-		delete(menu.Items, req.Item)
+		delete(sess.Menu.Items, req.Item)
 
 	case "increment":
 		var data struct {
@@ -118,7 +210,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if item, ok := menu.Items[req.Item]; ok {
+		if item, ok := sess.Menu.Items[req.Item]; ok {
 			item.Count++
 			if v, ok := item.OwnerCount[data.Owner]; ok {
 				item.OwnerCount[data.Owner] = v + 1
@@ -139,7 +231,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if item, ok := menu.Items[req.Item]; ok {
+		if item, ok := sess.Menu.Items[req.Item]; ok {
 			if item.Count > 0 {
 				item.Count--
 				item.OwnerCount[data.Owner]--
@@ -153,5 +245,5 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(Envelope{Status: "ok", Data: menu.Items})
+	json.NewEncoder(w).Encode(Envelope{Status: "ok", Data: sess.Menu.Items})
 }
