@@ -143,6 +143,9 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 			if item.Count > 0 {
 				item.Count--
 				item.OwnerCount[data.Owner]--
+				if item.OwnerCount[data.Owner] == 0 {
+					delete(item.OwnerCount, data.Owner)
+				}
 			}
 		} else {
 			http.Error(w, "Item not found", http.StatusNotFound)
